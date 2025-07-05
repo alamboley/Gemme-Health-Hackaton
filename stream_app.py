@@ -50,11 +50,75 @@ def transcribe_audio(wav_bytes: bytes) -> str:
 
     stream = model.generate_content(
         contents,
-        generation_config={"temperature": 0.0, "max_output_tokens": 8192},
+        generation_config={"temperature": 1.0, "max_output_tokens": 8192},
         stream=True,
     )
 
     return "".join(chunk.text for chunk in stream if hasattr(chunk, "text"))
+
+# prompt: créé un agent qui utilise MedGemma initialisé plus haut
+
+def simple_medgemma_agent(prompt_text, image_input=None, system_instruction="You are a helpful medical assistant.", crop_box=None):
+    """
+    Runs inference with the initialized MedGemma model or crops an image.
+
+    Args:
+        prompt_text: The text prompt for the model (used in text-to-text or image-to-text mode).
+        image_input: An optional PIL Image object for multimodal tasks or cropping.
+        system_instruction: The system instruction for the model (used in text-to-text or image-to-text mode).
+        crop_box: A tuple of (left, upper, right, lower) coordinates for cropping (used in cropping mode).
+
+    Returns:
+        The generated response from the MedGemma model (in text-to-text or image-to-text mode)
+        or the cropped PIL Image object (in cropping mode).
+    """
+
+    if crop_box and image_input:
+        # Cropping mode + resize
+        cropped = image_input.crop(crop_box).resize((512, 512))
+        return cropped
+
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": system_instruction}]
+        },
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": prompt_text}]
+        }
+    ]
+
+    if image_input:
+        messages[1]["content"].append({"type": "image", "image": image_input})
+        # Use the image-text-to-text pipeline for multimodal inputs
+        pipe = pipeline(
+            "image-text-to-text",
+            model=model_id,
+            model_kwargs=model_kwargs,
+        )
+        pipe.model.generation_config.do_sample = False
+        output = pipe(text=messages, max_new_tokens=300)
+        response = output[0]["generated_text"][-1]["content"]
+
+    else:
+        # Use the text-generation pipeline for text-only inputs
+        pipe = pipeline(
+            "text-generation",
+            model=model_id,
+            model_kwargs=model_kwargs,
+        )
+        pipe.model.generation_config.do_sample = False
+        max_new_tokens = 1500 if "27b" in model_variant and is_thinking else 500
+        output = pipe(messages, max_new_tokens=max_new_tokens)
+        response = output[0]["generated_text"][-1]["content"]
+        if "27b" in model_variant and is_thinking and "<unused95>" in response:
+            thought, response = response.split("<unused95>")
+            thought = thought.replace("<unused94>thought\n", "")
+            print(f"**[ MedGemma thinking ]**\n\n{thought}\n\n---")
+
+
+    return response
 
 # -----------------------------------------------------------------------------
 # Page & sidebar
